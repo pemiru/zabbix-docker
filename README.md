@@ -34,7 +34,8 @@ Database credentials are stored in secret files:
 
 This setup is designed to be deployed via Ansible. The `docker-compose.yaml` file uses default values where possible, making it easy to override via environment variables in your Ansible playbook.
 
-Example Ansible task:
+A complete example playbook is provided in `ansible-example.yaml`. Basic usage:
+
 ```yaml
 - name: Deploy Zabbix Proxy and Agent2
   community.docker.docker_compose_v2:
@@ -44,6 +45,8 @@ Example Ansible task:
     ZABBIX_PROXY_MYSQL_PORT: "10071"
     ZABBIX_AGENT2_PORT: "10060"
 ```
+
+See `ansible-example.yaml` for a complete example with service verification and configuration management.
 
 ## Directory Structure
 
