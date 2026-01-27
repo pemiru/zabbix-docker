@@ -1,0 +1,172 @@
+services:
+  mysql-server:
+    image: "${MYSQL_IMAGE:-mysql}:${MYSQL_IMAGE_TAG:-8.4-oracle}"
+    command:
+      - mysqld
+      - --skip-mysqlx
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_bin
+      - --log_bin_trust_function_creators=1
+    restart: "${RESTART_POLICY:-unless-stopped}"
+    volumes:
+      - ./zbx_env/var/lib/mysql:/var/lib/mysql:rw
+      - ./env_vars/mysql_init/init_proxy_db.sql:/docker-entrypoint-initdb.d/mysql_init_proxy.sql:ro
+    env_file:
+      - path: ./env_vars/.env_db_mysql
+        required: true
+    environment:
+      - MYSQL_ROOT_PASSWORD_FILE=/run/secrets/MYSQL_ROOT_PASSWORD
+    secrets:
+      - MYSQL_USER
+      - MYSQL_PASSWORD
+      - MYSQL_ROOT_PASSWORD
+    stop_grace_period: 1m
+    networks:
+      database:
+        aliases:
+          - mysql-server
+
+  proxy-db-init:
+    image: "${ZABBIX_PROXY_MYSQL_IMAGE:-zabbix/zabbix-proxy-mysql}:${ZABBIX_UBUNTU_IMAGE_TAG:-ubuntu-7.4}${ZABBIX_IMAGE_TAG_POSTFIX:--latest}"
+    init: true
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ./zbx_env/var/lib/zabbix/enc:/var/lib/zabbix/enc:ro
+    command: init_db_only
+    tmpfs: /tmp
+    env_file:
+      - path: ./env_vars/.env_db_mysql_proxy
+        required: true
+    secrets:
+      - MYSQL_USER
+      - MYSQL_PASSWORD
+    depends_on:
+      mysql-server:
+        condition: service_started
+    networks:
+      database:
+        aliases:
+          - zabbix-proxy-mysql-init
+    labels:
+      com.zabbix.description: "Zabbix proxy with MySQL database support (database init)"
+      com.zabbix.dbtype: "mysql"
+      com.zabbix.os: "Ubuntu"
+
+  zabbix-proxy-mysql:
+    image: "${ZABBIX_PROXY_MYSQL_IMAGE:-zabbix/zabbix-proxy-mysql}:${ZABBIX_UBUNTU_IMAGE_TAG:-ubuntu-7.4}${ZABBIX_IMAGE_TAG_POSTFIX:--latest}"
+    init: true
+    ports:
+      - "${ZABBIX_PROXY_MYSQL_PORT:-10071}:10051"
+    restart: "${RESTART_POLICY:-unless-stopped}"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ./zbx_env/usr/lib/zabbix/externalscripts:/usr/lib/zabbix/externalscripts:ro
+      - ./zbx_env/var/lib/zabbix/modules:/var/lib/zabbix/modules:ro
+      - ./zbx_env/var/lib/zabbix/enc:/var/lib/zabbix/enc:ro
+      - ./zbx_env/var/lib/zabbix/ssh_keys:/var/lib/zabbix/ssh_keys:ro
+      - ./zbx_env/var/lib/zabbix/mibs:/var/lib/zabbix/mibs:ro
+      - ./zbx_env/var/lib/zabbix/ssl/certs:/var/lib/zabbix/ssl/certs:ro
+      - ./zbx_env/var/lib/zabbix/ssl/keys:/var/lib/zabbix/ssl/keys:ro
+      - ./zbx_env/var/lib/zabbix/ssl/ssl_ca:/var/lib/zabbix/ssl/ssl_ca:rw
+    tmpfs: /tmp
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 20000
+        hard: 40000
+    deploy:
+      resources:
+        limits:
+          cpus: '0.70'
+          memory: 512M
+        reservations:
+          cpus: '0.3'
+          memory: 256M
+    env_file:
+      - path: ./env_vars/.env_db_mysql_proxy
+        required: true
+      - path: ./env_vars/.env_prx
+        required: true
+      - path: ./env_vars/.env_prx_mysql
+        required: true
+    secrets:
+      - MYSQL_USER
+      - MYSQL_PASSWORD
+    depends_on:
+      proxy-db-init:
+        condition: service_completed_successfully
+    networks:
+      database:
+        aliases:
+          - zabbix-proxy-mysql
+      backend:
+        aliases:
+          - zabbix-proxy-mysql
+    stop_grace_period: 30s
+    sysctls:
+      - net.ipv4.ip_local_port_range=1024 64999
+      - net.ipv4.conf.all.accept_redirects=0
+      - net.ipv4.conf.all.secure_redirects=0
+      - net.ipv4.conf.all.send_redirects=0
+    labels:
+      com.zabbix.description: "Zabbix proxy with MySQL database support"
+      com.zabbix.company: "Zabbix SIA"
+      com.zabbix.component: "proxy"
+      com.zabbix.dbtype: "mysql"
+      com.zabbix.os: "Ubuntu"
+
+  zabbix-agent2:
+    image: "${ZABBIX_AGENT2_IMAGE:-zabbix/zabbix-agent2}:${ZABBIX_UBUNTU_IMAGE_TAG:-ubuntu-7.4}${ZABBIX_IMAGE_TAG_POSTFIX:--latest}"
+    init: true
+    ports:
+      - "${ZABBIX_AGENT2_PORT:-10060}:10050"
+      - "${ZABBIX_AGENT2_STATUS_PORT:-31999}:31999"
+    restart: "${RESTART_POLICY:-unless-stopped}"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ./zbx_env/etc/zabbix/zabbix_agentd.d:/etc/zabbix/zabbix_agentd.d:ro
+      - ./zbx_env/var/lib/zabbix/modules:/var/lib/zabbix/modules:ro
+      - ./zbx_env/var/lib/zabbix/enc:/var/lib/zabbix/enc:ro
+      - ./zbx_env/var/lib/zabbix/ssh_keys:/var/lib/zabbix/ssh_keys:ro
+      - ./zbx_env/var/lib/zabbix/user_scripts:/var/lib/zabbix/user_scripts:ro
+    tmpfs: /tmp
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    env_file:
+      - path: ./env_vars/.env_agent
+        required: true
+    privileged: true
+    pid: "host"
+    networks:
+      backend:
+        aliases:
+          - zabbix-agent2
+          - zabbix-agent-passive
+    stop_grace_period: 5s
+    labels:
+      com.zabbix.description: "Zabbix agent 2"
+      com.zabbix.company: "Zabbix SIA"
+      com.zabbix.component: "agent2"
+      com.zabbix.os: "Ubuntu"
+
+networks:
+  backend:
+    driver: bridge
+    internal: true
+  database:
+    driver: bridge
+    internal: true
+
+secrets:
+  MYSQL_USER:
+    file: ./env_vars/.MYSQL_USER
+  MYSQL_PASSWORD:
+    file: ./env_vars/.MYSQL_PASSWORD
+  MYSQL_ROOT_PASSWORD:
+    file: ./env_vars/.MYSQL_ROOT_PASSWORD

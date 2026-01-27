@@ -1,0 +1,138 @@
+---
+# Example Ansible playbook for deploying Zabbix Proxy + Agent2
+# 
+# This playbook demonstrates how to deploy the simplified Zabbix Docker setup
+# using Ansible.
+
+- name: Deploy Zabbix Proxy and Agent2
+  hosts: zabbix_hosts
+  become: true
+  
+  vars:
+    zabbix_docker_dir: /opt/zabbix-docker
+    zabbix_proxy_port: 10071
+    zabbix_agent2_port: 10060
+    zabbix_agent2_status_port: 31999
+    # Optional: Override default values
+    # zabbix_ubuntu_tag: ubuntu-7.4
+    # mysql_image_tag: 8.4-oracle
+    
+  tasks:
+    - name: Install required packages
+      ansible.builtin.package:
+        name:
+          - docker
+          - docker-compose-plugin
+        state: present
+      
+    - name: Ensure Docker service is running
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+    
+    - name: Create Zabbix directory
+      ansible.builtin.file:
+        path: "{{ zabbix_docker_dir }}"
+        state: directory
+        mode: '0755'
+    
+    - name: Copy Zabbix Docker files
+      ansible.builtin.copy:
+        src: ./
+        dest: "{{ zabbix_docker_dir }}/"
+        mode: '0644'
+      
+    - name: Ensure environment files have correct permissions
+      ansible.builtin.file:
+        path: "{{ zabbix_docker_dir }}/env_vars"
+        state: directory
+        mode: '0755'
+        recurse: true
+    
+    - name: Deploy Zabbix services with Docker Compose
+      community.docker.docker_compose_v2:
+        project_src: "{{ zabbix_docker_dir }}"
+        state: present
+      environment:
+        ZABBIX_PROXY_MYSQL_PORT: "{{ zabbix_proxy_port }}"
+        ZABBIX_AGENT2_PORT: "{{ zabbix_agent2_port }}"
+        ZABBIX_AGENT2_STATUS_PORT: "{{ zabbix_agent2_status_port }}"
+      
+    - name: Wait for MySQL to be ready
+      ansible.builtin.wait_for:
+        host: localhost
+        port: 3306
+        timeout: 60
+        delay: 5
+      
+    - name: Wait for Zabbix Proxy to be ready
+      ansible.builtin.wait_for:
+        host: localhost
+        port: "{{ zabbix_proxy_port }}"
+        timeout: 120
+        delay: 10
+      
+    - name: Wait for Zabbix Agent2 to be ready
+      ansible.builtin.wait_for:
+        host: localhost
+        port: "{{ zabbix_agent2_port }}"
+        timeout: 60
+        delay: 5
+      
+    - name: Verify services are running
+      community.docker.docker_container_info:
+        name: "{{ item }}"
+      register: container_info
+      failed_when: container_info.container.State.Status != "running"
+      loop:
+        - zabbix-docker-mysql-server-1
+        - zabbix-docker-zabbix-proxy-mysql-1
+        - zabbix-docker-zabbix-agent2-1
+      
+    - name: Display deployment information
+      ansible.builtin.debug:
+        msg:
+          - "Zabbix Proxy deployed successfully!"
+          - "Proxy port: {{ zabbix_proxy_port }}"
+          - "Agent2 port: {{ zabbix_agent2_port }}"
+          - "Agent2 status port: {{ zabbix_agent2_status_port }}"
+          - ""
+          - "To check logs:"
+          - "  docker compose -f {{ zabbix_docker_dir }}/docker-compose.yaml logs"
+          - ""
+          - "To stop services:"
+          - "  docker compose -f {{ zabbix_docker_dir }}/docker-compose.yaml down"
+
+# Optional: Customize environment variables
+- name: Configure Zabbix environment (optional)
+  hosts: zabbix_hosts
+  become: true
+  
+  vars:
+    zabbix_docker_dir: /opt/zabbix-docker
+    zabbix_server_host: zabbix-server.example.com
+    zabbix_proxy_hostname: zabbix-proxy-01
+    
+  tasks:
+    - name: Update proxy configuration
+      ansible.builtin.lineinfile:
+        path: "{{ zabbix_docker_dir }}/env_vars/.env_prx"
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        state: present
+      loop:
+        - regexp: '^# ZBX_SERVER_HOST='
+          line: "ZBX_SERVER_HOST={{ zabbix_server_host }}"
+        - regexp: '^# ZBX_HOSTNAME='
+          line: "ZBX_HOSTNAME={{ zabbix_proxy_hostname }}"
+      notify: Restart Zabbix services
+      
+  handlers:
+    - name: Restart Zabbix services
+      community.docker.docker_compose_v2:
+        project_src: "{{ zabbix_docker_dir }}"
+        state: restarted
+        services:
+          - zabbix-proxy-mysql
+          - zabbix-agent2
