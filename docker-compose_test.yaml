@@ -27,7 +27,7 @@ services:
    service: web-nginx-pgsql
   image: "${ZABBIX_WEB_NGINX_PGSQL_IMAGE}:${ZABBIX_UBUNTU_IMAGE_TAG}${ZABBIX_IMAGE_TAG_POSTFIX}"
   volumes:
-   - ${DATA_DIRECTORY}/usr/share/zabbix/ui:/usr/share/zabbix:rw
+   - ${DATA_DIRECTORY}/usr/share/zabbix/ui:/usr/share/zabbix/ui:rw
   depends_on:
    server-db-init:
     condition: service_completed_successfully
